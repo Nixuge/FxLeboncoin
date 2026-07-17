@@ -101,6 +101,12 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
     // Navigate and wait only for initial DOM content load (extremely fast!)
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
+    try {
+      await page.waitForSelector('#__NEXT_DATA__', { timeout: 6000 });
+    } catch {
+      console.warn(`[fxlbc] Timeout waiting for #__NEXT_DATA__ selector on ad ${adId}`);
+    }
+
     // Extract __NEXT_DATA__
     const nextDataText = await page.evaluate(() => {
       const el = document.getElementById('__NEXT_DATA__');
@@ -215,6 +221,9 @@ app.get('/debug/:category/:id', async c => {
     try {
       const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
       status = res ? res.status() : 0;
+      try {
+        await page.waitForSelector('#__NEXT_DATA__', { timeout: 6000 });
+      } catch {}
       const html = await page.content();
       hasNextData = html.includes('__NEXT_DATA__');
     } finally {
