@@ -96,4 +96,5 @@ import worker from './src/worker';
 Bun.serve({
   port: worker.port,
   fetch: worker.fetch,
+  idleTimeout: 30
 });
