@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import puppeteer from 'puppeteer-core';
+import { Browser } from 'puppeteer-core';
 import pkg from '../package.json';
 
 
@@ -7,6 +9,7 @@ const LEBONCOIN_ROOT = 'https://www.leboncoin.fr';
 const BRAND_NAME = 'FxLeboncoin';
 const BRAND_COLOR = '#ff6e14'; // Leboncoin orange
 const MOSAIC_DOMAIN = process.env.MOSAIC_DOMAIN ?? '';
+const CHROME_DEBUG_URL = 'http://127.0.0.1:9222';
 
 const BOT_UA_REGEX =
   /bot|facebook|embed|got|firefox\/92|firefox\/38|curl|wget|go-http|yahoo|whatsapp|revoltchat|preview|link|proxy|vkshare|analyzer|crawl|spider|python|node|deno|mastodon|http\.rb|ruby|bun\/|iframely|cardyb|bluesky|matrix|feedly|rss|reader|atom|telegrambot|discordbot|twitterbot|slackbot|linkedinbot|applebot|signal/gi;
@@ -54,63 +57,72 @@ function formatPrice(price: number[] | undefined): string {
   }).format(price[0]);
 }
 
+/* Browser Connection Management */
 
-// fETCHer
-async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | null> {
-  const url = `${LEBONCOIN_ROOT}/ad/${category}/${adId}`;
-  console.log(`[fxlbc] fetching ${url}`);
+let globalBrowser: Browser | null = null;
 
-  let res: Response;
+async function getBrowser(): Promise<Browser> {
+  if (globalBrowser && globalBrowser.connected) {
+    return globalBrowser;
+  }
+
+  console.log(`[fxlbc] Connecting to active Chrome instance on ${CHROME_DEBUG_URL}...`);
   try {
-    res = await fetch(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Upgrade-Insecure-Requests': '1',
-        'Cache-Control': 'max-age=0',
-      },
-      redirect: 'follow',
+    globalBrowser = await puppeteer.connect({
+      browserURL: CHROME_DEBUG_URL,
     });
   } catch (e) {
-    console.error(`[fxlbc] fetch threw: ${e}`);
-    return null;
+    console.error(`[fxlbc] Failed to connect to Chrome. Make sure Chrome is running with --remote-debugging-port=9222!`);
+    throw new Error('Chrome connection failed');
   }
 
-  console.log(`[fxlbc] response: ${res.status}, content-type: ${res.headers.get('content-type')}`);
+  globalBrowser.on('disconnected', () => {
+    console.log('[fxlbc] Chrome disconnected');
+    globalBrowser = null;
+  });
 
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`[fxlbc] HTTP ${res.status}. Body snippet: ${body.slice(0, 400)}`);
-    return null;
-  }
+  return globalBrowser;
+}
 
-  const html = await res.text();
-  console.log(`[fxlbc] got ${html.length} bytes`);
+async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | null> {
+  const url = `${LEBONCOIN_ROOT}/ad/${category}/${adId}`;
+  console.log(`[fxlbc] Connected-fetching ${url}`);
 
-  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
-  if (!match) {
-    console.error(`[fxlbc] __NEXT_DATA__ not found. Page snippet: ${html.slice(0, 300)}`);
-    return null;
-  }
-
+  let browser: Browser;
   try {
-    const data = JSON.parse(match[1]);
-    const ad = data?.props?.pageProps?.ad ?? null;
-    console.log(`[fxlbc] parsed ad: ${ad?.subject ?? 'null'}`);
-    return ad;
+    browser = await getBrowser();
   } catch (e) {
-    console.error(`[fxlbc] JSON parse failed: ${e}`);
     return null;
+  }
+
+  const page = await browser.newPage();
+  
+  try {
+    // Navigate and wait only for initial DOM content load (extremely fast!)
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+    // Extract __NEXT_DATA__
+    const nextDataText = await page.evaluate(() => {
+      const el = document.getElementById('__NEXT_DATA__');
+      return el ? el.textContent : null;
+    });
+
+    if (!nextDataText) {
+      const title = await page.title();
+      console.error(`[fxlbc] __NEXT_DATA__ not found. Page title: ${title}`);
+      return null;
+    }
+
+    const data = JSON.parse(nextDataText);
+    const ad = data?.props?.pageProps?.ad ?? null;
+    console.log(`[fxlbc] Successfully fetched ad: ${ad?.subject ?? 'null'}`);
+    return ad;
+
+  } catch (e) {
+    console.error(`[fxlbc] Fetching failed for ad ${adId}:`, e);
+    return null;
+  } finally {
+    await page.close().catch(() => {});
   }
 }
 
@@ -164,7 +176,6 @@ ${imageMetaTags}
 
 const app = new Hono();
 
-
 app.get('/', c => {
   const host = c.req.header('host') ?? 'localhost:3000';
   const proto = host.startsWith('localhost') ? 'http' : 'https';
@@ -180,7 +191,6 @@ app.get('/', c => {
   );
 });
 
-
 app.get('/oembed', c => {
   const p = new URL(c.req.url).searchParams;
   return c.json({
@@ -194,34 +204,26 @@ app.get('/oembed', c => {
   });
 });
 
-
 app.get('/debug/:category/:id', async c => {
   const { id, category } = c.req.param();
   const url = `${LEBONCOIN_ROOT}/ad/${category}/${id}`;
-  let status = 0, contentType = '', snippet = '', hasNextData = false;
+  let status = 0, hasNextData = false, error = '';
+  
   try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Upgrade-Insecure-Requests': '1',
-      },
-      redirect: 'follow',
-    });
-    status = res.status;
-    contentType = res.headers.get('content-type') ?? '';
-    const body = await res.text();
-    snippet = body.slice(0, 600);
-    hasNextData = body.includes('__NEXT_DATA__');
-  } catch (e) {
-    snippet = `fetch threw: ${e}`;
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    try {
+      const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      status = res ? res.status() : 0;
+      const html = await page.content();
+      hasNextData = html.includes('__NEXT_DATA__');
+    } finally {
+      await page.close();
+    }
+  } catch (e: any) {
+    error = e.message;
   }
-  return c.json({ url, status, contentType, hasNextData, snippet });
+  return c.json({ url, status, hasNextData, error });
 });
 
 /* Main handler */
@@ -256,8 +258,9 @@ async function handleAd(c: any): Promise<Response> {
   const price = formatPrice(ad.price);
   if (price) parts.push(`💰 ${price}`);
   const loc = ad.location;
-  const locParts = [loc?.city_label ?? loc?.city, loc?.zipcode, loc?.department_name].filter(Boolean);
-  if (locParts.length) parts.push(`📍 ${locParts.join(' ')}`);
+  const cityAndZip = loc?.city && loc?.zipcode ? `${loc.city} (${loc.zipcode})` : (loc?.city_label ?? loc?.city);
+  const locationString = [cityAndZip, loc?.department_name].filter(Boolean).join(' - ');
+  if (locationString) parts.push(`📍 ${locationString}`);
   if (ad.body) parts.push(ad.body.trim().slice(0, 250));
   const description = parts.join('\n');
 
@@ -293,4 +296,6 @@ export default {
   fetch: app.fetch,
 };
 
-console.log(`${BRAND_NAME} v${VERSION} listening on http://localhost:${PORT}`);
+console.log(`🟠 ${BRAND_NAME} v${VERSION} listening on http://localhost:${PORT}`);
+// Connect to the running Chrome instance when starting up
+getBrowser().catch(() => {});
