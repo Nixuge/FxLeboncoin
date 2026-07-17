@@ -12,7 +12,7 @@ const MOSAIC_DOMAIN = process.env.MOSAIC_DOMAIN ?? '';
 const CHROME_DEBUG_URL = 'http://127.0.0.1:9222';
 
 const BOT_UA_REGEX =
-  /bot|facebook|embed|got|firefox\/92|firefox\/38|curl|wget|go-http|yahoo|whatsapp|revoltchat|preview|link|proxy|vkshare|analyzer|crawl|spider|python|node|deno|mastodon|http\.rb|ruby|bun\/|iframely|cardyb|bluesky|matrix|feedly|rss|reader|atom|telegrambot|discordbot|twitterbot|slackbot|linkedinbot|applebot|signal/gi;
+  /bot|facebook|embed|got|firefox\/92|firefox\/38|curl|wget|go-http|yahoo|whatsapp|revoltchat|preview|link|proxy|vkshare|analyzer|crawl|spider|python|node|deno|mastodon|http\.rb|ruby|bun\/|iframely|cardyb|bluesky|matrix|feedly|rss|reader|atom|telegrambot|discordbot|twitterbot|slackbot|linkedinbot|applebot|signal/i;
 
 
 interface AdImages {
@@ -120,7 +120,31 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
     }
 
     const data = JSON.parse(nextDataText);
-    const ad = data?.props?.pageProps?.ad ?? null;
+    const pageProps = data?.props?.pageProps;
+
+    if (pageProps && ('ad' in pageProps) && pageProps.ad === null) {
+      console.log(`[fxlbc] Ad is explicitly null/inactive in pageProps`);
+      return {
+        subject: `Annonce Inactive`,
+        body: `❌ Cette annonce n'est plus active (désactivée, vendue ou expirée).`,
+        price: [],
+        images: {},
+        location: {},
+      };
+    }
+
+    if (pageProps?.error) {
+      console.log(`[fxlbc] Page returned error: ${JSON.stringify(pageProps.error)}`);
+      return {
+        subject: `Annonce Inactive`,
+        body: `❌ Cette annonce n'est plus active (désactivée, vendue ou expirée).`,
+        price: [],
+        images: {},
+        location: {},
+      };
+    }
+
+    const ad = pageProps?.ad ?? null;
     console.log(`[fxlbc] Successfully fetched ad: ${ad?.subject ?? 'null'}`);
     return ad;
 
