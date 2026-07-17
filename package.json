@@ -1,0 +1,17 @@
+{
+  "name": "fxleboncoin",
+  "version": "1.0.0",
+  "description": "Rich embeds for Leboncoin listings on Discord, Telegram, and more.",
+  "scripts": {
+    "dev": "bun --hot src/worker.ts",
+    "start": "bun src/worker.ts",
+    "deploy-cf": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.7.11"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.8.3"
+  }
+}
