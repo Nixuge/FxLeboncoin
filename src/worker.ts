@@ -265,7 +265,13 @@ async function handleAd(c: any): Promise<Response> {
   const userAgent = c.req.header('User-Agent') ?? '';
   const listingUrl = `${LEBONCOIN_ROOT}/ad/${category}/${id}`;
 
-  if (!BOT_UA_REGEX.test(userAgent)) {
+  const isBot = BOT_UA_REGEX.test(userAgent);
+  if (!isBot) {
+    const isIOS = /iPhone|iPad|iPod/i.test(userAgent);
+    if (isIOS) {
+      const appUrl = `leboncoin://ad/${category}/${id}`;
+      return c.redirect(appUrl, 302);
+    }
     return c.redirect(listingUrl, 302);
   }
 
