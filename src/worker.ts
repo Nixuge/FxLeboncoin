@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import puppeteer from 'puppeteer-core';
 import { Browser } from 'puppeteer-core';
 import pkg from '../package.json';
+import { log, logError, logWarn, logMiddleware } from './logger';
 
 
 const VERSION = pkg.version;
@@ -66,18 +67,18 @@ async function getBrowser(): Promise<Browser> {
     return globalBrowser;
   }
 
-  console.log(`[fxlbc] Connecting to active Chrome instance on ${CHROME_DEBUG_URL}...`);
+  log(`[fxlbc] Connecting to active Chrome instance on ${CHROME_DEBUG_URL}...`);
   try {
     globalBrowser = await puppeteer.connect({
       browserURL: CHROME_DEBUG_URL,
     });
   } catch (e) {
-    console.error(`[fxlbc] Failed to connect to Chrome. Make sure Chrome is running with --remote-debugging-port=9222!`);
+    logError(`[fxlbc] Failed to connect to Chrome. Make sure Chrome is running with --remote-debugging-port=9222!`);
     throw new Error('Chrome connection failed');
   }
 
   globalBrowser.on('disconnected', () => {
-    console.log('[fxlbc] Chrome disconnected');
+    log('[fxlbc] Chrome disconnected');
     globalBrowser = null;
   });
 
@@ -86,7 +87,7 @@ async function getBrowser(): Promise<Browser> {
 
 async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | null> {
   const url = `${LEBONCOIN_ROOT}/ad/${category}/${adId}`;
-  console.log(`[fxlbc] Connected-fetching ${url}`);
+  log(`[fxlbc] Connected-fetching ${url}`);
 
   let browser: Browser;
   try {
@@ -104,7 +105,7 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
     try {
       await page.waitForSelector('#__NEXT_DATA__', { timeout: 6000 });
     } catch {
-      console.warn(`[fxlbc] Timeout waiting for #__NEXT_DATA__ selector on ad ${adId}`);
+      logWarn(`[fxlbc] Timeout waiting for #__NEXT_DATA__ selector on ad ${adId}`);
     }
 
     // Extract __NEXT_DATA__
@@ -115,7 +116,7 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
 
     if (!nextDataText) {
       const title = await page.title();
-      console.error(`[fxlbc] __NEXT_DATA__ not found. Page title: ${title}`);
+      logError(`[fxlbc] __NEXT_DATA__ not found. Page title: ${title}`);
       return null;
     }
 
@@ -123,7 +124,7 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
     const pageProps = data?.props?.pageProps;
 
     if (pageProps && ('ad' in pageProps) && pageProps.ad === null) {
-      console.log(`[fxlbc] Ad is explicitly null/inactive in pageProps`);
+      log(`[fxlbc] Ad is explicitly null/inactive in pageProps`);
       return {
         subject: `Annonce Inactive`,
         body: `❌ Cette annonce n'est plus active (désactivée, vendue ou expirée).`,
@@ -134,7 +135,7 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
     }
 
     if (pageProps?.error) {
-      console.log(`[fxlbc] Page returned error: ${JSON.stringify(pageProps.error)}`);
+      log(`[fxlbc] Page returned error: ${JSON.stringify(pageProps.error)}`);
       return {
         subject: `Annonce Inactive`,
         body: `❌ Cette annonce n'est plus active (désactivée, vendue ou expirée).`,
@@ -145,11 +146,11 @@ async function fetchAd(adId: string, category: string): Promise<LeboncoinAd | nu
     }
 
     const ad = pageProps?.ad ?? null;
-    console.log(`[fxlbc] Successfully fetched ad: ${ad?.subject ?? 'null'}`);
+    log(`[fxlbc] Successfully fetched ad: ${ad?.subject ?? 'null'}`);
     return ad;
 
   } catch (e) {
-    console.error(`[fxlbc] Fetching failed for ad ${adId}:`, e);
+    logError(`[fxlbc] Fetching failed for ad ${adId}:`, e);
     return null;
   } finally {
     await page.close().catch(() => {});
@@ -205,6 +206,8 @@ ${imageMetaTags}
 /* ── Hono app ───────────────────────────────────────────────── */
 
 const app = new Hono();
+
+app.use('*', logMiddleware());
 
 app.get('/', c => {
   const host = c.req.header('host') ?? 'localhost:3000';
@@ -275,7 +278,7 @@ async function handleAd(c: any): Promise<Response> {
     return c.redirect(listingUrl, 302);
   }
 
-  console.log(`[fxlbc] embed for ad ${id} | UA: ${userAgent.slice(0, 60)}`);
+  log(`[fxlbc] embed for ad ${id} | UA: ${userAgent.slice(0, 60)}`);
 
   const ad = await fetchAd(id, category);
 
@@ -335,6 +338,6 @@ export default {
   fetch: app.fetch,
 };
 
-console.log(`🟠 ${BRAND_NAME} v${VERSION} listening on http://localhost:${PORT}`);
+log(`🟠 ${BRAND_NAME} v${VERSION} listening on http://localhost:${PORT}`);
 // Connect to the running Chrome instance when starting up
 getBrowser().catch(() => {});
